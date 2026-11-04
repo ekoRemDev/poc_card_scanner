@@ -1,0 +1,251 @@
+{
+  "referenceDate": "2026-11-04",
+  "vectors": [
+    {
+      "description": "Visa, all fields",
+      "lines": [
+        "VISA",
+        "4111 1111 1111 1111",
+        "VALID THRU 03/29",
+        "AYSE YILMAZ"
+      ],
+      "expected": {
+        "number": "4111111111111111",
+        "expiry": "03/2029",
+        "holderName": "AYSE YILMAZ"
+      }
+    },
+    {
+      "description": "Amex 4-6-5",
+      "lines": [
+        "AMERICAN EXPRESS",
+        "3782 822463 10005",
+        "12/30"
+      ],
+      "expected": {
+        "number": "378282246310005",
+        "expiry": "12/2030",
+        "holderName": null
+      }
+    },
+    {
+      "description": "Troy",
+      "lines": [
+        "troy",
+        "9792 0300 0000 0000",
+        "MEHMET CAN DEMIR"
+      ],
+      "expected": {
+        "number": "9792030000000000",
+        "expiry": null,
+        "holderName": "MEHMET CAN DEMIR"
+      }
+    },
+    {
+      "description": "Mastercard 2-series",
+      "lines": [
+        "2223 0031 2200 3222",
+        "05/27"
+      ],
+      "expected": {
+        "number": "2223003122003222",
+        "expiry": "05/2027",
+        "holderName": null
+      }
+    },
+    {
+      "description": "OCR S->5 confusion",
+      "lines": [
+        "5555 5555 S555 4444"
+      ],
+      "expected": {
+        "number": "5555555555554444",
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "OCR l/I->1 confusion",
+      "lines": [
+        "4111 1111 1111 1lI1"
+      ],
+      "expected": {
+        "number": "4111111111111111",
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "OCR O->0 in number and expiry",
+      "lines": [
+        "4000 OO00 0000 0002",
+        "O8/28"
+      ],
+      "expected": {
+        "number": "4000000000000002",
+        "expiry": "08/2028",
+        "holderName": null
+      }
+    },
+    {
+      "description": "Number split across two lines",
+      "lines": [
+        "5555 5555",
+        "5555 4444"
+      ],
+      "expected": {
+        "number": "5555555555554444",
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Luhn invalid rejected",
+      "lines": [
+        "4111 1111 1111 1112"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Phone number rejected",
+      "lines": [
+        "+90 850 222 0 444",
+        "MUSTERI HIZMETLERI"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Card words are not names",
+      "lines": [
+        "WORLD ELITE",
+        "BONUS CARD",
+        "VISA GOLD"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "VALID FROM vs THRU picks later",
+      "lines": [
+        "VALID FROM 03/24",
+        "VALID THRU 03/29"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": "03/2029",
+        "holderName": null
+      }
+    },
+    {
+      "description": "Four digit year with dash",
+      "lines": [
+        "12-2030"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": "12/2030",
+        "holderName": null
+      }
+    },
+    {
+      "description": "Invalid month rejected",
+      "lines": [
+        "13/28"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Far past year rejected",
+      "lines": [
+        "01/99"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Single word name rejected",
+      "lines": [
+        "MASTERCARD",
+        "JOHN"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Turkish characters in name",
+      "lines": [
+        "ŞEYMA GÜLDÜR"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": "ŞEYMA GÜLDÜR"
+      }
+    },
+    {
+      "description": "Name with initial rejected",
+      "lines": [
+        "JOHN A SMITH"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Unknown BIN rejected",
+      "lines": [
+        "1234 5678 9012 3452"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "20-digit run is not sliced into a number",
+      "lines": [
+        "41111111111111111234"
+      ],
+      "expected": {
+        "number": null,
+        "expiry": null,
+        "holderName": null
+      }
+    },
+    {
+      "description": "Number and expiry on one line",
+      "lines": [
+        "4111 1111 1111 1111 03/29"
+      ],
+      "expected": {
+        "number": "4111111111111111",
+        "expiry": "03/2029",
+        "holderName": null
+      }
+    }
+  ]
+}
