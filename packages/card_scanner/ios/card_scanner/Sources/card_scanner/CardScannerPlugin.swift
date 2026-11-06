@@ -16,6 +16,14 @@ public class CardScannerPlugin: NSObject, FlutterPlugin, CardScannerHostApi {
       googlePay: false)
   }
 
+  func calibrateEmbossed(options: ScanOptionsMessage, knownNumber: String) async throws
+    -> CalibrationResultMessage?
+  {
+    // Apple Vision already reads embossed digits; calibration is Android only.
+    throw PigeonError(
+      code: "unavailable", message: "Embossed calibration is Android only", details: nil)
+  }
+
   func scan(options: ScanOptionsMessage) async throws -> ScanResultMessage? {
     if options.engine != .native && !options.fallbackToNative {
       throw PigeonError(

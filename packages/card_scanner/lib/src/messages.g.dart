@@ -285,14 +285,21 @@ class ScanResultMessage {
 }
 
 class AvailabilityMessage {
-  AvailabilityMessage({required this.native, required this.googlePay});
+  AvailabilityMessage({
+    required this.native,
+    required this.googlePay,
+    this.googlePayUnavailableReason,
+  });
 
   bool native;
 
   bool googlePay;
 
+  /// Why Google Pay card recognition is unavailable (as reported by Google).
+  String? googlePayUnavailableReason;
+
   List<Object?> _toList() {
-    return <Object?>[native, googlePay];
+    return <Object?>[native, googlePay, googlePayUnavailableReason];
   }
 
   Object encode() {
@@ -304,6 +311,7 @@ class AvailabilityMessage {
     return AvailabilityMessage(
       native: result[0]! as bool,
       googlePay: result[1]! as bool,
+      googlePayUnavailableReason: result[2] as String?,
     );
   }
 
@@ -317,7 +325,11 @@ class AvailabilityMessage {
       return true;
     }
     return _deepEquals(native, other.native) &&
-        _deepEquals(googlePay, other.googlePay);
+        _deepEquals(googlePay, other.googlePay) &&
+        _deepEquals(
+          googlePayUnavailableReason,
+          other.googlePayUnavailableReason,
+        );
   }
 
   @override
@@ -326,7 +338,63 @@ class AvailabilityMessage {
 
   @override
   String toString() {
-    return 'AvailabilityMessage(native: $native, googlePay: $googlePay)';
+    return 'AvailabilityMessage(native: $native, googlePay: $googlePay, googlePayUnavailableReason: $googlePayUnavailableReason)';
+  }
+}
+
+class CalibrationResultMessage {
+  CalibrationResultMessage({
+    required this.framesUsed,
+    required this.digitsCovered,
+    this.filePath,
+  });
+
+  int framesUsed;
+
+  int digitsCovered;
+
+  /// File with the averaged digit shapes (no card number), if saved.
+  String? filePath;
+
+  List<Object?> _toList() {
+    return <Object?>[framesUsed, digitsCovered, filePath];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static CalibrationResultMessage decode(Object result) {
+    result as List<Object?>;
+    return CalibrationResultMessage(
+      framesUsed: result[0]! as int,
+      digitsCovered: result[1]! as int,
+      filePath: result[2] as String?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! CalibrationResultMessage ||
+        other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(framesUsed, other.framesUsed) &&
+        _deepEquals(digitsCovered, other.digitsCovered) &&
+        _deepEquals(filePath, other.filePath);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'CalibrationResultMessage(framesUsed: $framesUsed, digitsCovered: $digitsCovered, filePath: $filePath)';
   }
 }
 
@@ -349,6 +417,9 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is AvailabilityMessage) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
+    } else if (value is CalibrationResultMessage) {
+      buffer.putUint8(133);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -366,6 +437,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return ScanResultMessage.decode(readValue(buffer)!);
       case 132:
         return AvailabilityMessage.decode(readValue(buffer)!);
+      case 133:
+        return CalibrationResultMessage.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -430,5 +503,31 @@ class CardScannerHostApi {
       isNullValid: true,
     );
     return pigeonVar_replyValue as ScanResultMessage?;
+  }
+
+  /// Development only (Android): learn embossed digit shapes from a card
+  /// whose number is known. Returns null if cancelled.
+  Future<CalibrationResultMessage?> calibrateEmbossed(
+    ScanOptionsMessage options,
+    String knownNumber,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.card_scanner.CardScannerHostApi.calibrateEmbossed$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[options, knownNumber],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
+    return pigeonVar_replyValue as CalibrationResultMessage?;
   }
 }

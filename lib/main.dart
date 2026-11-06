@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import 'baseline/flutter_scanner_page.dart';
 import 'scan_record.dart';
+import 'snapshot/snapshot_scan_page.dart';
 
 void main() => runApp(const CardScannerSpikeApp());
 
@@ -92,6 +93,77 @@ class _AddCardPageState extends State<AddCardPage> {
   Future<void> _scanBaseline() async =>
       _apply(await FlutterScannerPage.open(context));
 
+  /// Experiment: auto-photo when the card fits the frame, result in a SnackBar.
+  Future<void> _scanSnapshot() async {
+    final result = await SnapshotScanPage.open(context);
+    if (result == null || !mounted) return;
+    final secs = (result.elapsed.inMilliseconds / 1000).toStringAsFixed(1);
+    final text = result.number != null
+        ? 'Card: ${CardScanResult.formatPan(result.number!)}'
+              '${result.expiry != null ? '   Exp: ${result.expiry!.formatted}' : ''}'
+              '   (${secs}s)'
+        : result.digitGroups.isEmpty
+        ? 'No numbers found (${secs}s)'
+        : 'No valid card number. Read: ${result.digitGroups.join(' | ')}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text), duration: const Duration(seconds: 8)),
+    );
+  }
+
+  /// Dev tool: learn embossed digit shapes from a card with a known number.
+  Future<void> _calibrate() async {
+    final controller = TextEditingController();
+    final number = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Calibrate embossed reader'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter the number of the embossed card you will scan. '
+              'It stays in memory for this scan only; the SDK saves only '
+              'average digit shapes, never the number.',
+            ),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Card number'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Start'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (number == null || !mounted) return;
+    try {
+      final result = await _scanner.calibrateEmbossed(number);
+      if (!mounted || result == null) return;
+      _snack(
+        result.framesUsed == 0
+            ? 'Calibration: no usable frames (keep the number line inside the frame)'
+            : 'Calibration saved: ${result.framesUsed} frames, '
+                  '${result.digitsCovered}/10 digits',
+      );
+    } on ArgumentError catch (e) {
+      _snack('${e.message}');
+    } on CardScanException catch (e) {
+      _snack('${e.code.name}: ${e.message ?? ''}');
+    }
+  }
+
   void _snack(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
@@ -146,7 +218,9 @@ class _AddCardPageState extends State<AddCardPage> {
                   null => 'Checking Google Pay card recognition…',
                   true =>
                     'Google Pay card recognition: available on this device',
-                  false => 'Google Pay card recognition: NOT available on this device/region',
+                  false =>
+                    'Google Pay card recognition unavailable: '
+                        '${_availability?.googlePayUnavailableReason ?? 'unknown reason'}',
                 },
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall
@@ -169,6 +243,17 @@ class _AddCardPageState extends State<AddCardPage> {
             ),
             value: _debugOcr,
             onChanged: (v) => setState(() => _debugOcr = v),
+          ),
+          if (Platform.isAndroid)
+            TextButton.icon(
+              onPressed: _calibrate,
+              icon: const Icon(Icons.tune),
+              label: const Text('Calibrate embossed reader (dev)'),
+            ),
+          FilledButton.tonalIcon(
+            onPressed: _scanSnapshot,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: const Text('Snapshot scan (auto photo → snackbar)'),
           ),
           TextButton.icon(
             onPressed: _scanBaseline,

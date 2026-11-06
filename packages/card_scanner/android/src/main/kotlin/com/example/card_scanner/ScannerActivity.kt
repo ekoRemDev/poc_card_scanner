@@ -73,6 +73,14 @@ class ScannerActivity : ComponentActivity() {
         const val EXTRA_DEBUG_TEXT = "debugShowRecognizedText"
         const val EXTRA_ENGINE = "engine"
         const val ENGINE_DOUBANGO = "doubango"
+        const val EXTRA_CALIBRATION_NUMBER = "calibrationNumber"
+        const val RESULT_CAL_FRAMES = "calFrames"
+        const val RESULT_CAL_DIGITS = "calDigits"
+        const val RESULT_CAL_PATH = "calPath"
+
+        /** Built-in embossed digit shapes shipped with the SDK (optional). */
+        const val EMBOSSED_TEMPLATES_ASSET = "card_scanner_embossed_templates.json"
+        private const val CALIBRATION_TARGET_FRAMES = 40
         private const val LOG_TAG = "CardScanner"
 
         /** Live scanning gets this long before still photos start. */
@@ -208,8 +216,12 @@ class ScannerActivity : ComponentActivity() {
         val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val bar = FrameLayout(this)
         val closeButton = iconButton(R.drawable.card_scanner_ic_close, "Close") {
-            setResult(RESULT_CANCELED)
-            finish()
+            if (calibrationNumber != null) {
+                finishCalibration() // keep whatever was learned so far
+            } else {
+                setResult(RESULT_CANCELED)
+                finish()
+            }
         }
         torchButton = iconButton(R.drawable.card_scanner_ic_flash_off, "Torch") { toggleTorch() }
         bar.addView(closeButton, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.START))
@@ -350,7 +362,9 @@ class ScannerActivity : ComponentActivity() {
                         this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, capture,
                     ).also {
                         imageCapture = capture
-                        if (external == null) mainHandler.postDelayed(photoLoop, PHOTO_FIRST_DELAY_MS)
+                        if (external == null && calibrationNumber == null) {
+                            mainHandler.postDelayed(photoLoop, PHOTO_FIRST_DELAY_MS)
+                        }
                     }
                 } catch (e: IllegalArgumentException) {
                     // Device can't run 3 streams together: live scanning only.
@@ -391,13 +405,25 @@ class ScannerActivity : ComponentActivity() {
         val variant = LIVE_VARIANTS[frameCounter++ % LIVE_VARIANTS.size]
         val input: InputImage
         val filterRoi: Rect?
+        // Raw luminance of the card frame, upright: used by the enhanced
+        // variants and by the embossed-number reader (cell templates).
+        val cardLuma: LumaEnhancer.GrayImage?
+        // Offset from OCR coordinates to cardLuma coordinates.
+        val ocrOffsetX: Int
+        val ocrOffsetY: Int
         try {
-            if (variant == FrameVariant.RAW || roi == null || roi.width() < 32 || roi.height() < 32) {
+            val usableRoi = roi?.takeIf { it.width() >= 32 && it.height() >= 32 }
+            cardLuma = usableRoi?.let { cardLuma(proxy, rotation, it) }
+            if (variant == FrameVariant.RAW || usableRoi == null || cardLuma == null) {
                 input = InputImage.fromMediaImage(media, rotation)
                 filterRoi = roi
+                ocrOffsetX = usableRoi?.left ?: 0
+                ocrOffsetY = usableRoi?.top ?: 0
             } else {
-                input = enhancedCrop(proxy, rotation, roi, invert = variant == FrameVariant.CONTRAST_INVERTED)
+                input = enhancedInput(cardLuma, invert = variant == FrameVariant.CONTRAST_INVERTED)
                 filterRoi = null // the crop *is* the card frame
+                ocrOffsetX = 0
+                ocrOffsetY = 0
             }
         } catch (e: Exception) {
             proxy.close()
@@ -416,12 +442,54 @@ class ScannerActivity : ComponentActivity() {
                     }
                     .sortedBy { it.boundingBox?.top ?: 0 }
                     .map { it.text }
-                val frame = parser.parse(lines)
+                var frame = parser.parse(lines)
                 if (debug) {
                     logDiagnostics(
                         variant, SystemClock.elapsedRealtime() - startedOcr, roi,
                         uprightWidth, uprightHeight, all.size, lines, frame,
                     )
+                }
+                // Embossed digits: ML Kit locates the line, our reader reads it.
+                val calibrating = calibrationNumber
+                if (cardLuma != null && calibrating != null) {
+                    val symbolLines = all.map { line ->
+                        line.elements.flatMap { it.symbols }.mapNotNull { sym ->
+                            val box = sym.boundingBox ?: return@mapNotNull null
+                            val ch = sym.text.singleOrNull() ?: return@mapNotNull null
+                            EmbossedNumberReader.Symbol(
+                                ch,
+                                box.left - ocrOffsetX, box.top - ocrOffsetY,
+                                box.right - ocrOffsetX, box.bottom - ocrOffsetY,
+                                sym.confidence,
+                            )
+                        }
+                    }
+                    val diag = embossedReader.calibrate(symbolLines, cardLuma, calibrating)
+                    if (debug) Log.d(LOG_TAG, "${variant.name.lowercase()} $diag")
+                    val frames = embossedReader.calibrationFrames
+                    liveNumber.text = "Calibrating… $frames/$CALIBRATION_TARGET_FRAMES"
+                    liveNumber.visibility = View.VISIBLE
+                    if (frames >= CALIBRATION_TARGET_FRAMES) finishCalibration()
+                    return@addOnSuccessListener
+                }
+                if (cardLuma != null) {
+                    val symbolLines = all.map { line ->
+                        line.elements.flatMap { it.symbols }.mapNotNull { sym ->
+                            val box = sym.boundingBox ?: return@mapNotNull null
+                            val ch = sym.text.singleOrNull() ?: return@mapNotNull null
+                            EmbossedNumberReader.Symbol(
+                                ch,
+                                box.left - ocrOffsetX, box.top - ocrOffsetY,
+                                box.right - ocrOffsetX, box.bottom - ocrOffsetY,
+                                sym.confidence,
+                            )
+                        }
+                    }
+                    val embossed = embossedReader.update(symbolLines, cardLuma)
+                    if (debug) Log.d(LOG_TAG, "${variant.name.lowercase()} ${embossed.diagnostics}")
+                    if (frame.number == null && embossed.number != null) {
+                        frame = frame.copy(number = embossed.number)
+                    }
                 }
                 onFrame(frame, variant, lines)
             }
@@ -441,22 +509,69 @@ class ScannerActivity : ComponentActivity() {
     private val enhancer = LumaEnhancer()
     private var enhancedBitmap: Bitmap? = null
 
+    private val embossedReader by lazy { EmbossedNumberReader(loadBuiltInTemplates()) }
+
+    /** Development calibration mode: the known card number (memory only). */
+    private val calibrationNumber: String? by lazy { intent.getStringExtra(EXTRA_CALIBRATION_NUMBER) }
+
+    private fun loadBuiltInTemplates(): Array<FloatArray?> = try {
+        assets.open(EMBOSSED_TEMPLATES_ASSET).bufferedReader().use {
+            EmbossedNumberReader.templatesFromJson(it.readText())
+        }.also { t -> if (debug) Log.d(LOG_TAG, "built-in embossed templates: ${t.count { it != null }}/10 digits") }
+    } catch (_: java.io.FileNotFoundException) {
+        arrayOfNulls(10) // none shipped yet
+    } catch (e: Exception) {
+        Log.w(LOG_TAG, "embossed templates unreadable: ${e.javaClass.simpleName}")
+        arrayOfNulls(10)
+    }
+
     /**
-     * Card-frame crop of the luminance plane, upright, local-contrast boosted.
-     * Buffers and the bitmap are reused: with KEEP_ONLY_LATEST the next frame
-     * only arrives after this one's proxy is closed (OCR complete).
+     * Saves the averaged digit shapes (never the card number) to the app's
+     * external files dir, so a developer can `adb pull` and merge them.
      */
-    private fun enhancedCrop(proxy: ImageProxy, rotation: Int, roi: Rect, invert: Boolean): InputImage {
+    private fun finishCalibration() {
+        if (finished) return
+        finished = true
+        val templates = embossedReader.calibratedTemplates()
+        val frames = embossedReader.calibrationFrames
+        var path: String? = null
+        if (frames > 0) {
+            try {
+                val dir = getExternalFilesDir(null) ?: filesDir
+                val file = java.io.File(dir, "embossed_calibration_${System.currentTimeMillis()}.json")
+                file.writeText(EmbossedNumberReader.templatesToJson(templates, frames))
+                path = file.absolutePath
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "calibration save failed: ${e.javaClass.simpleName}")
+            }
+        }
+        setResult(RESULT_OK, Intent().apply {
+            putExtra(RESULT_CAL_FRAMES, frames)
+            putExtra(RESULT_CAL_DIGITS, templates.count { it != null })
+            putExtra(RESULT_CAL_PATH, path)
+        })
+        finish()
+    }
+
+    /**
+     * Upright luminance of the card frame (reused buffers). With
+     * KEEP_ONLY_LATEST the next frame only arrives after this one's proxy is
+     * closed (OCR complete), so the buffers are stable while OCR runs.
+     */
+    private fun cardLuma(proxy: ImageProxy, rotation: Int, roi: Rect): LumaEnhancer.GrayImage {
         val plane = proxy.planes[0] // Y plane of YUV_420_888, pixelStride == 1
         val buffer = plane.buffer.duplicate().apply { rewind() }
         val size = buffer.remaining()
         if (lumaBuffer.size < size) lumaBuffer = ByteArray(size)
         buffer.get(lumaBuffer, 0, size)
-
-        val crop = enhancer.cropUpright(
+        return enhancer.cropUpright(
             lumaBuffer, proxy.width, proxy.height, plane.rowStride, rotation,
             roi.left, roi.top, roi.right, roi.bottom,
         )
+    }
+
+    /** Local-contrast boosted bitmap of [crop] for ML Kit. */
+    private fun enhancedInput(crop: LumaEnhancer.GrayImage, invert: Boolean): InputImage {
         // Window ≈ digit height (~1/16 of the card-frame crop).
         val radius = maxOf(6, crop.height / 20)
         val gray = enhancer.localNormalize(crop, radius, invert)
@@ -516,7 +631,9 @@ class ScannerActivity : ComponentActivity() {
         Log.d(
             LOG_TAG,
             "${variant.name.lowercase()} ${ocrMs}ms img=${imageWidth}x$imageHeight roi=${roi?.toShortString()} " +
-                "lines=${lines.size}/$totalLines number=${frame.number != null} expiry=${frame.expiry != null} " +
+                "lines=${lines.size}/$totalLines number=${frame.number != null}" +
+                (frame.number?.let { "(fp=${EmbossedNumberReader.fingerprint(it)})" } ?: "") +
+                " expiry=${frame.expiry != null} " +
                 "name=${frame.holderName != null} :: $shapes",
         )
     }

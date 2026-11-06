@@ -26,10 +26,12 @@ class CardScannerPlugin :
     private companion object {
         const val REQUEST_NATIVE_SCAN = 0xCA01
         const val REQUEST_GOOGLE_PAY_SCAN = 0xCA02
+        const val REQUEST_CALIBRATION = 0xCA03
     }
 
     private var binding: ActivityPluginBinding? = null
     private var pending: CancellableContinuation<ScanResultMessage?>? = null
+    private var pendingCalibration: CancellableContinuation<CalibrationResultMessage?>? = null
     private var googlePayStartedAt = 0L
     /** Engine running inside ScannerActivity for the pending scan. */
     private var activityEngine = ScanEngineMessage.NATIVE
@@ -68,7 +70,12 @@ class CardScannerPlugin :
         val activity = activity()
         val hasCamera = activity.packageManager
             .hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
-        return AvailabilityMessage(native = hasCamera, googlePay = googlePayIntentOrNull(activity) != null)
+        val intent = googlePayIntentOrNull(activity)
+        return AvailabilityMessage(
+            native = hasCamera,
+            googlePay = intent != null,
+            googlePayUnavailableReason = if (intent == null) lastGooglePayError else null,
+        )
     }
 
     override suspend fun scan(options: ScanOptionsMessage): ScanResultMessage? {
@@ -97,6 +104,18 @@ class CardScannerPlugin :
         }
     }
 
+    override suspend fun calibrateEmbossed(options: ScanOptionsMessage, knownNumber: String): CalibrationResultMessage? {
+        if (pending != null || pendingCalibration != null) throw FlutterError("busy", "A scan is already in progress")
+        val activity = activity()
+        return suspendCancellableCoroutine { continuation ->
+            pendingCalibration = continuation
+            continuation.invokeOnCancellation { pendingCalibration = null }
+            val intent = ScannerActivity.intent(activity, options)
+                .putExtra(ScannerActivity.EXTRA_CALIBRATION_NUMBER, knownNumber)
+            activity.startActivityForResult(intent, REQUEST_CALIBRATION)
+        }
+    }
+
     private suspend fun awaitResult(launch: () -> Unit): ScanResultMessage? =
         suspendCancellableCoroutine { continuation ->
             pending = continuation
@@ -112,6 +131,29 @@ class CardScannerPlugin :
     // ----------------------------------------------------------- results
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode == REQUEST_CALIBRATION) {
+            val continuation = pendingCalibration ?: return true
+            pendingCalibration = null
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                continuation.resume(
+                    CalibrationResultMessage(
+                        framesUsed = data.getIntExtra(ScannerActivity.RESULT_CAL_FRAMES, 0).toLong(),
+                        digitsCovered = data.getIntExtra(ScannerActivity.RESULT_CAL_DIGITS, 0).toLong(),
+                        filePath = data.getStringExtra(ScannerActivity.RESULT_CAL_PATH),
+                    ),
+                )
+            } else if (resultCode == ScannerActivity.RESULT_ERROR) {
+                continuation.resumeWithException(
+                    FlutterError(
+                        data?.getStringExtra(ScannerActivity.RESULT_ERROR_CODE) ?: "camera_error",
+                        data?.getStringExtra(ScannerActivity.RESULT_ERROR_MESSAGE),
+                    ),
+                )
+            } else {
+                continuation.resume(null)
+            }
+            return true
+        }
         val result = when (requestCode) {
             REQUEST_NATIVE_SCAN -> runCatching { nativeResult(resultCode, data) }
             REQUEST_GOOGLE_PAY_SCAN -> runCatching { googlePayResult(resultCode, data) }
@@ -162,6 +204,7 @@ class CardScannerPlugin :
     // ----------------------------------------------------------- Google Pay
 
     private var paymentsClient: PaymentsClient? = null
+    private var lastGooglePayError: String? = null
 
     /**
      * The only reliable availability check is asking for the intent: it fails
@@ -171,6 +214,7 @@ class CardScannerPlugin :
         val playServices = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(activity)
         if (playServices != ConnectionResult.SUCCESS) {
             android.util.Log.w("CardScanner", "Google Play services unavailable: status $playServices")
+            lastGooglePayError = "Google Play services unavailable (status $playServices)"
             null
         } else {
             val client = paymentsClient ?: Wallet.getPaymentsClient(
@@ -190,6 +234,8 @@ class CardScannerPlugin :
         // No card data here; the reason is what developers need to see
         // (e.g. app not enabled for Google Pay production, region, device).
         android.util.Log.w("CardScanner", "Google Pay card recognition unavailable: $e")
+        lastGooglePayError = (e as? com.google.android.gms.common.api.ApiException)
+            ?.let { "${it.statusCode}: ${it.message?.substringAfter(": ")}" } ?: e.toString()
         null
     }
 }

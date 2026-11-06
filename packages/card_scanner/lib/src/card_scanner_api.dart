@@ -146,14 +146,36 @@ class CardScanException implements Exception {
   String toString() => 'CardScanException(${code.name}: ${message ?? ''})';
 }
 
+class CalibrationResult {
+  const CalibrationResult({
+    required this.framesUsed,
+    required this.digitsCovered,
+    this.filePath,
+  });
+
+  final int framesUsed;
+
+  /// How many of the digits 0–9 the calibration card contained.
+  final int digitsCovered;
+  final String? filePath;
+}
+
 class ScannerAvailability {
-  const ScannerAvailability({required this.native, required this.googlePay});
+  const ScannerAvailability({
+    required this.native,
+    required this.googlePay,
+    this.googlePayUnavailableReason,
+  });
 
   /// A camera exists (and, on iOS, Vision is available).
   final bool native;
 
   /// Android only: Google Pay card recognition can be launched.
   final bool googlePay;
+
+  /// Google's reason when [googlePay] is false, e.g. the app isn't
+  /// registered for the card recognition API (production access needed).
+  final String? googlePayUnavailableReason;
 }
 
 /// Entry point of the SDK.
@@ -170,7 +192,11 @@ class CardScanner {
 
   Future<ScannerAvailability> availability() async {
     final m = await _guard(_api.getAvailability);
-    return ScannerAvailability(native: m.native, googlePay: m.googlePay);
+    return ScannerAvailability(
+      native: m.native,
+      googlePay: m.googlePay,
+      googlePayUnavailableReason: m.googlePayUnavailableReason,
+    );
   }
 
   /// Opens the scanner. Returns null if the user cancels.
@@ -217,6 +243,39 @@ class CardScanner {
       framesProcessed: message.framesProcessed > 0
           ? message.framesProcessed
           : null,
+    );
+  }
+
+  /// **Development only (Android).** Opens the scanner in calibration mode:
+  /// scan an embossed card whose [knownNumber] you enter, and the SDK saves
+  /// the average shape of each digit (no card number) to a file, to be
+  /// merged into the SDK's built-in embossed digit shapes.
+  /// Returns null if cancelled.
+  Future<CalibrationResult?> calibrateEmbossed(String knownNumber) async {
+    final digits = knownNumber.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 16 || !CardParser.luhnValid(digits)) {
+      throw ArgumentError('Enter a valid 16-digit card number');
+    }
+    final m = await _guard(
+      () => _api.calibrateEmbossed(
+        ScanOptionsMessage(
+          engine: ScanEngineMessage.native,
+          fallbackToNative: true,
+          scanExpiry: false,
+          scanHolderName: false,
+          timeoutMs: 0,
+          debugShowRecognizedText: false,
+          title: 'Calibration: hold the embossed card steady',
+          subtitle: 'Learning digit shapes. Nothing is uploaded.',
+        ),
+        digits,
+      ),
+    );
+    if (m == null) return null;
+    return CalibrationResult(
+      framesUsed: m.framesUsed,
+      digitsCovered: m.digitsCovered,
+      filePath: m.filePath,
     );
   }
 

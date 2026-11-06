@@ -72,6 +72,19 @@ class AvailabilityMessage {
 
   bool native;
   bool googlePay;
+
+  /// Why Google Pay card recognition is unavailable (as reported by Google).
+  String? googlePayUnavailableReason;
+}
+
+class CalibrationResultMessage {
+  CalibrationResultMessage({required this.framesUsed, required this.digitsCovered});
+
+  int framesUsed;
+  int digitsCovered;
+
+  /// File with the averaged digit shapes (no card number), if saved.
+  String? filePath;
 }
 
 /// Errors are reported as PlatformException with these codes:
@@ -84,4 +97,9 @@ abstract class CardScannerHostApi {
 
   @async
   ScanResultMessage? scan(ScanOptionsMessage options);
+
+  /// Development only (Android): learn embossed digit shapes from a card
+  /// whose number is known. Returns null if cancelled.
+  @async
+  CalibrationResultMessage? calibrateEmbossed(ScanOptionsMessage options, String knownNumber);
 }

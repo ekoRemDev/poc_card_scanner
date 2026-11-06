@@ -350,20 +350,24 @@ data class ScanResultMessage (
 /** Generated class from Pigeon that represents data sent in messages. */
 data class AvailabilityMessage (
   val native: Boolean,
-  val googlePay: Boolean
+  val googlePay: Boolean,
+  /** Why Google Pay card recognition is unavailable (as reported by Google). */
+  val googlePayUnavailableReason: String? = null
 )
  {
   companion object {
     fun fromList(pigeonVar_list: List<Any?>): AvailabilityMessage {
       val native = pigeonVar_list[0] as Boolean
       val googlePay = pigeonVar_list[1] as Boolean
-      return AvailabilityMessage(native, googlePay)
+      val googlePayUnavailableReason = pigeonVar_list[2] as String?
+      return AvailabilityMessage(native, googlePay, googlePayUnavailableReason)
     }
   }
   fun toList(): List<Any?> {
     return listOf(
       native,
       googlePay,
+      googlePayUnavailableReason,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -374,17 +378,64 @@ data class AvailabilityMessage (
       return true
     }
     val other = other as AvailabilityMessage
-    return MessagesPigeonUtils.deepEquals(this.native, other.native) && MessagesPigeonUtils.deepEquals(this.googlePay, other.googlePay)
+    return MessagesPigeonUtils.deepEquals(this.native, other.native) && MessagesPigeonUtils.deepEquals(this.googlePay, other.googlePay) && MessagesPigeonUtils.deepEquals(this.googlePayUnavailableReason, other.googlePayUnavailableReason)
   }
 
   override fun hashCode(): Int {
     var result = javaClass.hashCode()
     result = 31 * result + MessagesPigeonUtils.deepHash(this.native)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.googlePay)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.googlePayUnavailableReason)
     return result
   }
   override fun toString(): String {
-    return "AvailabilityMessage(native=$native, googlePay=$googlePay)"
+    return "AvailabilityMessage(native=$native, googlePay=$googlePay, googlePayUnavailableReason=$googlePayUnavailableReason)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class CalibrationResultMessage (
+  val framesUsed: Long,
+  val digitsCovered: Long,
+  /** File with the averaged digit shapes (no card number), if saved. */
+  val filePath: String? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CalibrationResultMessage {
+      val framesUsed = pigeonVar_list[0] as Long
+      val digitsCovered = pigeonVar_list[1] as Long
+      val filePath = pigeonVar_list[2] as String?
+      return CalibrationResultMessage(framesUsed, digitsCovered, filePath)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      framesUsed,
+      digitsCovered,
+      filePath,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as CalibrationResultMessage
+    return MessagesPigeonUtils.deepEquals(this.framesUsed, other.framesUsed) && MessagesPigeonUtils.deepEquals(this.digitsCovered, other.digitsCovered) && MessagesPigeonUtils.deepEquals(this.filePath, other.filePath)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.framesUsed)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.digitsCovered)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.filePath)
+    return result
+  }
+  override fun toString(): String {
+    return "CalibrationResultMessage(framesUsed=$framesUsed, digitsCovered=$digitsCovered, filePath=$filePath)"
   }
 }
 private open class MessagesPigeonCodec : StandardMessageCodec() {
@@ -410,6 +461,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           AvailabilityMessage.fromList(it)
         }
       }
+      133.toByte() -> {
+        (readValue(buffer) as? List<Any?>)?.let {
+          CalibrationResultMessage.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -431,6 +487,10 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(132)
         writeValue(stream, value.toList())
       }
+      is CalibrationResultMessage -> {
+        stream.write(133)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -447,6 +507,11 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
 interface CardScannerHostApi {
   suspend fun getAvailability(): AvailabilityMessage
   suspend fun scan(options: ScanOptionsMessage): ScanResultMessage?
+  /**
+   * Development only (Android): learn embossed digit shapes from a card
+   * whose number is known. Returns null if cancelled.
+   */
+  suspend fun calibrateEmbossed(options: ScanOptionsMessage, knownNumber: String): CalibrationResultMessage?
 
   companion object {
     /** The codec used by CardScannerHostApi. */
@@ -483,6 +548,26 @@ interface CardScannerHostApi {
             CoroutineScope(Dispatchers.Main).launch {
               val wrapped: List<Any?> = try {
                 listOf(api.scan(optionsArg))
+              } catch (exception: Throwable) {
+                MessagesPigeonUtils.wrapError(exception)
+              }
+              reply.reply(wrapped)
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.card_scanner.CardScannerHostApi.calibrateEmbossed$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val optionsArg = args[0] as ScanOptionsMessage
+            val knownNumberArg = args[1] as String
+            CoroutineScope(Dispatchers.Main).launch {
+              val wrapped: List<Any?> = try {
+                listOf(api.calibrateEmbossed(optionsArg, knownNumberArg))
               } catch (exception: Throwable) {
                 MessagesPigeonUtils.wrapError(exception)
               }

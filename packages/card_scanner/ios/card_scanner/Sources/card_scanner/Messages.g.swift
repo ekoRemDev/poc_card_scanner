@@ -338,39 +338,91 @@ struct ScanResultMessage: Hashable, CustomStringConvertible {
 struct AvailabilityMessage: Hashable, CustomStringConvertible {
   var native: Bool
   var googlePay: Bool
+  /// Why Google Pay card recognition is unavailable (as reported by Google).
+  var googlePayUnavailableReason: String? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
   static func fromList(_ pigeonVar_list: [Any?]) -> AvailabilityMessage? {
     let native = pigeonVar_list[0] as! Bool
     let googlePay = pigeonVar_list[1] as! Bool
+    let googlePayUnavailableReason: String? = nilOrValue(pigeonVar_list[2])
 
     return AvailabilityMessage(
       native: native,
-      googlePay: googlePay
+      googlePay: googlePay,
+      googlePayUnavailableReason: googlePayUnavailableReason
     )
   }
   func toList() -> [Any?] {
     return [
       native,
       googlePay,
+      googlePayUnavailableReason,
     ]
   }
   static func == (lhs: AvailabilityMessage, rhs: AvailabilityMessage) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return MessagesPigeonInternal.deepEquals(lhs.native, rhs.native) && MessagesPigeonInternal.deepEquals(lhs.googlePay, rhs.googlePay)
+    return MessagesPigeonInternal.deepEquals(lhs.native, rhs.native) && MessagesPigeonInternal.deepEquals(lhs.googlePay, rhs.googlePay) && MessagesPigeonInternal.deepEquals(lhs.googlePayUnavailableReason, rhs.googlePayUnavailableReason)
   }
 
   func hash(into hasher: inout Hasher) {
     hasher.combine("AvailabilityMessage")
     MessagesPigeonInternal.deepHash(value: native, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: googlePay, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: googlePayUnavailableReason, hasher: &hasher)
   }
 
   public var description: String {
-    return "AvailabilityMessage(native: \(String(describing: native)), googlePay: \(String(describing: googlePay)))"
+    return "AvailabilityMessage(native: \(String(describing: native)), googlePay: \(String(describing: googlePay)), googlePayUnavailableReason: \(String(describing: googlePayUnavailableReason)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct CalibrationResultMessage: Hashable, CustomStringConvertible {
+  var framesUsed: Int64
+  var digitsCovered: Int64
+  /// File with the averaged digit shapes (no card number), if saved.
+  var filePath: String? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CalibrationResultMessage? {
+    let framesUsed = pigeonVar_list[0] as! Int64
+    let digitsCovered = pigeonVar_list[1] as! Int64
+    let filePath: String? = nilOrValue(pigeonVar_list[2])
+
+    return CalibrationResultMessage(
+      framesUsed: framesUsed,
+      digitsCovered: digitsCovered,
+      filePath: filePath
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      framesUsed,
+      digitsCovered,
+      filePath,
+    ]
+  }
+  static func == (lhs: CalibrationResultMessage, rhs: CalibrationResultMessage) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.framesUsed, rhs.framesUsed) && MessagesPigeonInternal.deepEquals(lhs.digitsCovered, rhs.digitsCovered) && MessagesPigeonInternal.deepEquals(lhs.filePath, rhs.filePath)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("CalibrationResultMessage")
+    MessagesPigeonInternal.deepHash(value: framesUsed, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: digitsCovered, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: filePath, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "CalibrationResultMessage(framesUsed: \(String(describing: framesUsed)), digitsCovered: \(String(describing: digitsCovered)), filePath: \(String(describing: filePath)))"
   }
 }
 
@@ -389,6 +441,8 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return ScanResultMessage.fromList(self.readValue() as! [Any?])
     case 132:
       return AvailabilityMessage.fromList(self.readValue() as! [Any?])
+    case 133:
+      return CalibrationResultMessage.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -408,6 +462,9 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
       super.writeValue(value.toList())
     } else if let value = value as? AvailabilityMessage {
       super.writeByte(132)
+      super.writeValue(value.toList())
+    } else if let value = value as? CalibrationResultMessage {
+      super.writeByte(133)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -438,6 +495,9 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 protocol CardScannerHostApi {
   func getAvailability() async throws -> AvailabilityMessage
   func scan(options: ScanOptionsMessage) async throws -> ScanResultMessage?
+  /// Development only (Android): learn embossed digit shapes from a card
+  /// whose number is known. Returns null if cancelled.
+  func calibrateEmbossed(options: ScanOptionsMessage, knownNumber: String) async throws -> CalibrationResultMessage?
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -477,6 +537,26 @@ class CardScannerHostApiSetup {
       }
     } else {
       scanChannel.setMessageHandler(nil)
+    }
+    /// Development only (Android): learn embossed digit shapes from a card
+    /// whose number is known. Returns null if cancelled.
+    let calibrateEmbossedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.card_scanner.CardScannerHostApi.calibrateEmbossed\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      calibrateEmbossedChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let optionsArg = args[0] as! ScanOptionsMessage
+        let knownNumberArg = args[1] as! String
+        Task { @MainActor in
+          do {
+            let result = try await api.calibrateEmbossed(options: optionsArg, knownNumber: knownNumberArg)
+            reply(wrapResult(result))
+          } catch {
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      calibrateEmbossedChannel.setMessageHandler(nil)
     }
   }
 }
